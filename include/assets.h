@@ -25,9 +25,15 @@ extern const uint16_t ic_screen_off[4096] PROGMEM;
 extern const uint16_t ic_screen_on[4096] PROGMEM;
 extern const uint16_t ic_input[4096] PROGMEM;
 
+// Generated HDMI input tiles
+extern const uint16_t ic_hdmi1[4096] PROGMEM;
+extern const uint16_t ic_hdmi2[4096] PROGMEM;
+extern const uint16_t ic_hdmi3[4096] PROGMEM;
+extern const uint16_t ic_hdmi4[4096] PROGMEM;
+
 // App art, keyed by webOS app id
 struct AppArt { const char* id; const uint16_t* icon; };
-#define APP_ART_COUNT 21
+#define APP_ART_COUNT 18
 extern const AppArt APP_ART[APP_ART_COUNT];
 
 extern const uint16_t app_netflix[4096] PROGMEM;
@@ -48,6 +54,3 @@ extern const uint16_t app_airplay[4096] PROGMEM;
 extern const uint16_t app_com_webos_app_photovideo[4096] PROGMEM;
 extern const uint16_t app_com_webos_app_music[4096] PROGMEM;
 extern const uint16_t app_com_bskyb_skystore[4096] PROGMEM;
-extern const uint16_t app_mubi[4096] PROGMEM;
-extern const uint16_t app_lgchannels_uk[4096] PROGMEM;
-extern const uint16_t app_com_palm_app_settings[4096] PROGMEM;

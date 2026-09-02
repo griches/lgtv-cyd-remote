@@ -57,6 +57,7 @@ struct Tile {
 
 #define T_REQ(icon, uri)        {icon, nullptr, CmdType::Request, uri, "", Dyn::None, false}
 #define T_REQR(icon, uri)       {icon, nullptr, CmdType::Request, uri, "", Dyn::None, true}
+#define T_REQP(icon, uri, json) {icon, nullptr, CmdType::Request, uri, json, Dyn::None, false}
 #define T_BTN(icon, name)       {icon, nullptr, CmdType::Button, name, "", Dyn::None, true}
 #define T_BTN1(icon, name)      {icon, nullptr, CmdType::Button, name, "", Dyn::None, false}
 #define T_APP(icon, id)         {icon, nullptr, CmdType::LaunchApp, id, "", Dyn::None, false}
@@ -98,20 +99,20 @@ static const Page PAGES[] = {
     T_APP(app_plex, "plex"),
   }},
   {"Extras", {
-    {ic_screen_off, ic_screen_on, CmdType::ScreenToggle, "", "", Dyn::Screen, false},
-    T_BTN1(ic_exit, "EXIT"),
     T_BTN1(ic_settings, "MENU"),
-    T_APP(app_com_webos_app_livetv, "com.webos.app.livetv"),
-
+    T_BTN1(ic_exit, "EXIT"),
+    {ic_screen_off, ic_screen_on, CmdType::ScreenToggle, "", "", Dyn::Screen, false},
     T_APP(app_airplay, "airplay"),
+
+    T_REQP(ic_hdmi1, "ssap://tv/switchInput", "{\"inputId\":\"HDMI_1\"}"),
+    T_REQP(ic_hdmi2, "ssap://tv/switchInput", "{\"inputId\":\"HDMI_2\"}"),
+    T_REQP(ic_hdmi3, "ssap://tv/switchInput", "{\"inputId\":\"HDMI_3\"}"),
+    T_REQP(ic_hdmi4, "ssap://tv/switchInput", "{\"inputId\":\"HDMI_4\"}"),
+
+    T_APP(app_com_webos_app_livetv, "com.webos.app.livetv"),
     T_APP(app_com_webos_app_photovideo, "com.webos.app.photovideo"),
     T_APP(app_com_webos_app_music, "com.webos.app.music"),
-    T_APP(app_com_webos_app_igallery, "com.webos.app.igallery"),
-
-    T_APP(app_lgchannels_uk, "lgchannels.uk"),
-    T_APP(app_com_palm_app_settings, "com.palm.app.settings"),
     T_APP(app_com_bskyb_skystore, "com.bskyb.skystore"),
-    T_APP(app_mubi, "mubi"),
   }},
 };
 static const int PAGE_COUNT = sizeof(PAGES) / sizeof(PAGES[0]);
