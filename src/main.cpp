@@ -43,7 +43,7 @@ static const uint16_t TILE_BG = 0x18E3;           // dark tile for text buttons
 static const uint16_t ACCENT = 0x3D9F;            // blue
 static const uint16_t GREEN = 0x2E8B;
 
-enum class Dyn : uint8_t { None, Mute, Play, Screen };
+enum class Dyn : uint8_t { None, Mute, Play, Screen, Input };
 
 struct Tile {
   const uint16_t* icon;
@@ -58,6 +58,8 @@ struct Tile {
 #define T_REQ(icon, uri)        {icon, nullptr, CmdType::Request, uri, "", Dyn::None, false}
 #define T_REQR(icon, uri)       {icon, nullptr, CmdType::Request, uri, "", Dyn::None, true}
 #define T_REQP(icon, uri, json) {icon, nullptr, CmdType::Request, uri, json, Dyn::None, false}
+// Input tile: blank key + the TV's label for the input; a = input id
+#define T_INPUT(id)             {ic_key_blank, nullptr, CmdType::Request, id, "", Dyn::Input, false}
 #define T_BTN(icon, name)       {icon, nullptr, CmdType::Button, name, "", Dyn::None, true}
 #define T_BTN1(icon, name)      {icon, nullptr, CmdType::Button, name, "", Dyn::None, false}
 #define T_APP(icon, id)         {icon, nullptr, CmdType::LaunchApp, id, "", Dyn::None, false}
@@ -104,10 +106,10 @@ static const Page PAGES[] = {
     {ic_screen_off, ic_screen_on, CmdType::ScreenToggle, "", "", Dyn::Screen, false},
     T_APP(app_airplay, "airplay"),
 
-    T_REQP(ic_hdmi1, "ssap://tv/switchInput", "{\"inputId\":\"HDMI_1\"}"),
-    T_REQP(ic_hdmi2, "ssap://tv/switchInput", "{\"inputId\":\"HDMI_2\"}"),
-    T_REQP(ic_hdmi3, "ssap://tv/switchInput", "{\"inputId\":\"HDMI_3\"}"),
-    T_REQP(ic_hdmi4, "ssap://tv/switchInput", "{\"inputId\":\"HDMI_4\"}"),
+    T_INPUT("HDMI_1"),
+    T_INPUT("HDMI_2"),
+    T_INPUT("HDMI_3"),
+    T_INPUT("HDMI_4"),
 
     T_APP(app_com_webos_app_livetv, "com.webos.app.livetv"),
     T_APP(app_com_webos_app_photovideo, "com.webos.app.photovideo"),
@@ -175,6 +177,32 @@ static void textButton(int x, int y, int w, int h, const char* label, uint16_t b
 
 // ---------------------------------------------------------- grid view
 
+// Draw the TV's name for an input, centred on a blank key, up to two lines.
+static void drawInputLabel(const char* id, int ix, int iy) {
+  InputInfo in;
+  char label[24];
+  if (lg.getInput(id, in)) strlcpy(label, in.label, sizeof(label));
+  else snprintf(label, sizeof(label), "HDMI %c", id[strlen(id) - 1]);  // "HDMI_3" -> "HDMI 3"
+
+  const int maxW = ICON_W - 8;
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(KEY_GLYPH_COLOUR);  // no bg: keep the tile gradient
+  String l1(label), l2;
+  int font = 4;                         // big when it fits on one line
+  if (tft.textWidth(l1, font) > maxW) font = 2;
+  if (tft.textWidth(l1, font) > maxW) {
+    int sp = l1.lastIndexOf(' ');
+    while (sp > 0 && tft.textWidth(l1.substring(0, sp), font) > maxW) sp = l1.lastIndexOf(' ', sp - 1);
+    if (sp > 0) { l2 = l1.substring(sp + 1); l1 = l1.substring(0, sp); }
+    while (l1.length() > 1 && tft.textWidth(l1, font) > maxW) l1.remove(l1.length() - 1);
+    while (l2.length() > 1 && tft.textWidth(l2, font) > maxW) l2.remove(l2.length() - 1);
+  }
+  int cx = ix + ICON_W / 2, cy = iy + ICON_H / 2;
+  if (l2.length()) { tft.drawString(l1, cx, cy - 8, font); tft.drawString(l2, cx, cy + 9, font); }
+  else tft.drawString(l1, cx, cy, font);
+  if (in.id[0] && in.connected) tft.fillCircle(ix + ICON_W - 10, iy + 10, 2, TFT_GREEN);
+}
+
 static void tileRect(int idx, int& x, int& y) {
   x = (idx % COLS) * CELL_W;
   y = (idx / COLS) * CELL_H;
@@ -189,6 +217,7 @@ static void drawTile(int idx, bool highlight) {
   const uint16_t* icon = (t.iconAlt && dynOn(t.dyn)) ? t.iconAlt : t.icon;
   int ix = x + (CELL_W - ICON_W) / 2, iy = y + (CELL_H - ICON_H) / 2;
   tft.pushImage(ix, iy, ICON_W, ICON_H, icon);
+  if (t.dyn == Dyn::Input) drawInputLabel(t.a, ix, iy);
   if (highlight) {
     bool usable = lg.link.load() == LinkState::Registered || t.cmd == CmdType::PowerToggle;
     uint16_t c = usable ? TFT_WHITE : TFT_RED;
@@ -364,6 +393,12 @@ static void setMode(Mode m) {
 // --------------------------------------------------------------- input
 
 static void fire(const Tile& t) {
+  if (t.dyn == Dyn::Input) {
+    char payload[40];
+    snprintf(payload, sizeof(payload), "{\"inputId\":\"%s\"}", t.a);
+    lg.post(CmdType::Request, "ssap://tv/switchInput", payload);
+    return;
+  }
   switch (t.cmd) {
     case CmdType::None: return;
     case CmdType::Request:    lg.post(CmdType::Request, t.a, t.b); break;
@@ -585,6 +620,8 @@ static void syncState() {
     shownMuted = m; shownPlaying = p; shownScreenOff = s;
     gridDirty = true;
   }
+  static uint32_t shownInputsGen = 0;
+  if (lg.inputsGen.load() != shownInputsGen) { shownInputsGen = lg.inputsGen.load(); gridDirty = true; }
 
   uint32_t err = lg.lastError.load();
   if (err != shownError) { shownError = err; errorFlashUntil = millis() + 600; barDirty = true; }

@@ -25,11 +25,9 @@ extern const uint16_t ic_screen_off[4096] PROGMEM;
 extern const uint16_t ic_screen_on[4096] PROGMEM;
 extern const uint16_t ic_input[4096] PROGMEM;
 
-// Generated HDMI input tiles
-extern const uint16_t ic_hdmi1[4096] PROGMEM;
-extern const uint16_t ic_hdmi2[4096] PROGMEM;
-extern const uint16_t ic_hdmi3[4096] PROGMEM;
-extern const uint16_t ic_hdmi4[4096] PROGMEM;
+// Generated blank key (labels drawn at runtime)
+extern const uint16_t ic_key_blank[4096] PROGMEM;
+#define KEY_GLYPH_COLOUR 0xEF3B
 
 // App art, keyed by webOS app id
 struct AppArt { const char* id; const uint16_t* icon; };

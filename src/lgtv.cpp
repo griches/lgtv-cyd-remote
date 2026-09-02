@@ -39,6 +39,35 @@ bool LGTV::getFound(int i, FoundTV& out) {
   return ok;
 }
 
+bool LGTV::getInput(const char* id, InputInfo& out) {
+  xSemaphoreTake(foundMtx_, portMAX_DELAY);
+  bool ok = false;
+  for (int i = 0; i < inputCount_; i++) if (!strcmp(inputs_[i].id, id)) { out = inputs_[i]; ok = true; break; }
+  xSemaphoreGive(foundMtx_);
+  return ok;
+}
+
+void LGTV::fetchInputs() {
+  request("ssap://tv/getExternalInputList", nullptr, [this](bool ok, JsonObjectConst r) {
+    if (!ok) return;
+    xSemaphoreTake(foundMtx_, portMAX_DELAY);
+    inputCount_ = 0;
+    for (JsonObjectConst d : r["devices"].as<JsonArrayConst>()) {
+      if (inputCount_ >= MAX_INPUTS) break;
+      const char* id = d["id"] | "";
+      if (!*id) continue;
+      InputInfo& in = inputs_[inputCount_++];
+      strlcpy(in.id, id, sizeof(in.id));
+      strlcpy(in.label, d["label"] | id, sizeof(in.label));
+      in.connected = d["connected"] | false;
+    }
+    int n = inputCount_;
+    xSemaphoreGive(foundMtx_);
+    inputsGen++;
+    LOGF("%s %d inputs from %s\n", TAG, n, cur_.name);
+  }, 5000);
+}
+
 // ------------------------------------------------------------------ task
 
 void LGTV::taskEntry(void* self) { static_cast<LGTV*>(self)->task(); }
@@ -134,6 +163,7 @@ void LGTV::onRegistered(const char* key) {
 
   // Self-heal missing MACs so power-off never strands the TV unwakeable.
   if (!cur_.mac[0] && !cur_.wifiMac[0]) fetchMacs(false);
+  fetchInputs();
 }
 
 static bool formatMac(const char* in, char* out, size_t outLen) {
@@ -528,6 +558,8 @@ void LGTV::handleCmd(const Cmd& c) {
       failStreak_ = 0;
       useTls_ = true;
       muted = false; playing = false; screenOff = false;
+      xSemaphoreTake(foundMtx_, portMAX_DELAY); inputCount_ = 0; xSemaphoreGive(foundMtx_);
+      inputsGen++;
       connectMain();
       break;
     }

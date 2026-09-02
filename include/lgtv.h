@@ -37,6 +37,7 @@ struct Cmd {
 };
 
 struct FoundTV { char name[32]; char ip[16]; };
+struct InputInfo { char id[16]; char label[24]; bool connected; };
 
 class LGTV {
  public:
@@ -58,6 +59,10 @@ class LGTV {
   int foundCount();
   bool getFound(int i, FoundTV& out);
 
+  // External inputs as the TV reports them (label = the user's name for it).
+  std::atomic<uint32_t> inputsGen{0};
+  bool getInput(const char* id, InputInfo& out);
+
  private:
   using ResponseCb = std::function<void(bool ok, JsonObjectConst payload)>;
   struct Pending { uint32_t id = 0; uint32_t deadline = 0; ResponseCb cb; };
@@ -72,6 +77,7 @@ class LGTV {
   void sendRegister();
   void onRegistered(const char* key);
   void fetchMacs(bool secondTry);
+  void fetchInputs();
   uint32_t request(const char* uri, const char* payloadJson, ResponseCb cb, uint32_t timeoutMs = 4000);
   void expirePending();
   void wake();
@@ -101,4 +107,7 @@ class LGTV {
   static const int MAX_FOUND = 8;
   FoundTV found_[MAX_FOUND];
   int foundCount_ = 0;
+  static const int MAX_INPUTS = 8;
+  InputInfo inputs_[MAX_INPUTS];
+  int inputCount_ = 0;
 };
