@@ -9,8 +9,9 @@ usage: tools/cyd.py CMD [CMD ...] [--port PORT] [--wait SECS]
 
 Commands are sent verbatim to the firmware (see handleSerial in src/main.cpp):
     p N        page      t X Y   tap      b NAME  remote button     h  heap
-plus one handled here:
+plus two handled here:
     shot FILE  dump the framebuffer to FILE (png)
+    sleep N    wait N seconds, printing whatever the board logs
 
 The panel returns each readback row shifted by one byte; corrected here.
 """
@@ -28,7 +29,7 @@ def open_port(port, baud):
     while time.time() < end:
         buf += s.read(4096)
         if b"LG remote booting" in buf: booted = True
-        if booted and b"TVs, default" in buf:
+        if booted and b"TVs, selected" in buf:
             time.sleep(0.3)
             break
         if not booted and time.time() > end - 3:  # quiet port: nothing rebooted
@@ -86,6 +87,11 @@ def main():
     for c in a.cmds:
         if c.startswith("shot "):
             shot(s, c[5:].strip())
+            continue
+        if c.startswith("sleep "):
+            out = read_for(s, float(c[6:]))
+            if out:
+                print(out)
             continue
         s.write((c + "\n").encode())
         out = read_for(s, a.wait)

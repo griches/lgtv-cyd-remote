@@ -9,16 +9,9 @@
 #include <ArduinoJson.h>
 #include <functional>
 #include <atomic>
+#include "tvstore.h"
 
-enum class LinkState : uint8_t { NoWifi, Offline, Connecting, Registered };
-
-struct TVTarget {
-  const char* name;
-  const char* ip;
-  const char* clientKey;
-  const char* mac;
-  const char* wifiMac;
-};
+enum class LinkState : uint8_t { NoWifi, NoTV, Connecting, NeedsPin, Registered };
 
 enum class CmdType : uint8_t {
   None,
@@ -29,7 +22,12 @@ enum class CmdType : uint8_t {
   PlayPause,     // getForegroundAppInfo -> play/pause
   ScreenToggle,  // turnOffScreen / turnOnScreen with luna fallback
   LaunchApp,     // a = app id
-  SelectTV,      // a = index into targets
+  SelectTV,      // a = store index
+  Scan,          // SSDP discovery; results in found list
+  PairStart,     // a = ip, b = name; registers without a key so the TV shows a PIN
+  SubmitPin,     // a = pin
+  CancelPair,
+  Forget,        // a = store index
 };
 
 struct Cmd {
@@ -38,9 +36,11 @@ struct Cmd {
   char b[160] = {0};
 };
 
+struct FoundTV { char name[32]; char ip[16]; };
+
 class LGTV {
  public:
-  void begin(const TVTarget* targets, int count, int initial = 0);
+  void begin(TVStore* store);
   bool post(CmdType t, const char* a = nullptr, const char* b = nullptr);
 
   // Shared state for the UI (written on the net task).
@@ -48,11 +48,15 @@ class LGTV {
   std::atomic<bool> muted{false};
   std::atomic<bool> playing{false};
   std::atomic<bool> screenOff{false};
-  std::atomic<int> tvIndex{0};
-  std::atomic<uint32_t> lastActivity{0};  // millis of last TV response
-  std::atomic<uint32_t> lastError{0};     // millis of last failed action
+  std::atomic<bool> pairing{false};      // a PairStart is in progress
+  std::atomic<bool> pairFailed{false};   // last PIN was rejected (cleared by next SubmitPin)
+  std::atomic<bool> scanning{false};
+  std::atomic<uint32_t> foundGen{0};     // bumps when the found list changes
+  std::atomic<uint32_t> lastActivity{0};
+  std::atomic<uint32_t> lastError{0};
 
-  const TVTarget& current() const { return targets_[tvIndex.load()]; }
+  int foundCount();
+  bool getFound(int i, FoundTV& out);
 
  private:
   using ResponseCb = std::function<void(bool ok, JsonObjectConst payload)>;
@@ -62,18 +66,23 @@ class LGTV {
   void task();
   void handleCmd(const Cmd& c);
   void connectMain();
+  void dropAll();
   void onMainEvent(WStype_t type, uint8_t* data, size_t len);
   void onPointerEvent(WStype_t type, uint8_t* data, size_t len);
   void sendRegister();
+  void onRegistered(const char* key);
+  void fetchMacs(bool secondTry);
   uint32_t request(const char* uri, const char* payloadJson, ResponseCb cb, uint32_t timeoutMs = 4000);
   void expirePending();
   void wake();
   void openPointerSocket();
   void sendButtonRaw(const char* name);
   void lunaCall(const char* lunaUri, const char* paramsJson);
+  void scan();
 
-  const TVTarget* targets_ = nullptr;
-  int targetCount_ = 0;
+  TVStore* store_ = nullptr;
+  TVRecord cur_ = {};
+  int curIdx_ = -1;
   QueueHandle_t queue_ = nullptr;
   WebSocketsClient ws_;
   WebSocketsClient ptr_;
@@ -85,5 +94,11 @@ class LGTV {
   uint32_t nextId_ = 1;
   static const int MAX_PENDING = 6;
   Pending pending_[MAX_PENDING];
-  char pendingButton_[16] = {0};  // button waiting for the pointer socket
+  char pendingButton_[16] = {0};
+  static const uint32_t PIN_REQUEST_ID = 0xFFFFFFF0;
+
+  SemaphoreHandle_t foundMtx_ = nullptr;
+  static const int MAX_FOUND = 8;
+  FoundTV found_[MAX_FOUND];
+  int foundCount_ = 0;
 };
