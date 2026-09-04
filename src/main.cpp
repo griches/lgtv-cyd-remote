@@ -708,6 +708,7 @@ static void pollTouch() {
     if (dimmed) { dimmed = false; ledcWrite(BL_CH, 255); wasDown = true; return; }  // wake only
     int x = constrain((int)map(p.x, RAW_MIN, RAW_MAX, 0, tft.width()), 0, tft.width() - 1);
     int y = constrain((int)map(p.y, RAW_MIN, RAW_MAX, 0, tft.height()), 0, tft.height() - 1);
+    LOGF("[touch] %d,%d raw=%d,%d z=%d\n", x, y, p.x, p.y, p.z);
     onPress(x, y);
   } else if (down && wasDown) {
     onHold();
