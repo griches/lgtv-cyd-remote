@@ -68,9 +68,12 @@ bool loadJson(const char* json, String* err) {
   if (pages.isNull() || pages.size() == 0) { if (err) *err = "no pages"; return false; }
   if (pages.size() > LAYOUT_MAX_PAGES) { if (err) *err = "too many pages"; return false; }
 
-  // Static scratch copy: Layout is ~14 KB, far too big for the loop task stack.
+  // Static scratch copy: Layout is ~14 KB, far too big to build on the stack.
+  // Clear it in place — constructing a temporary Layout() here overflowed the
+  // web-server task stack and rebooted the device mid-save.
   static Layout l;
-  l = Layout();
+  memset(&l, 0, sizeof(l));
+  l.pageCount = 0;
   for (JsonObjectConst p : pages) {
     PageDef& pd = l.pages[l.pageCount++];
     strlcpy(pd.name, p["name"] | "Page", sizeof(pd.name));
