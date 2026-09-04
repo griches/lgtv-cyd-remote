@@ -272,9 +272,10 @@ static void drawList() {
   for (int r = 0; r < rowCount; r++) drawListRow(r);
   drawWifiRow();
   if (store.count() == 0 && lg.foundCount() == 0 && !lg.scanning.load()) {
+    // Just below the last row (the Scan button), clear of the Wi-Fi row.
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(TFT_LIGHTGREY, BG);
-    tft.drawString("No TVs yet. Scan to find one.", tft.width() / 2, GRID_H - 30, 2);
+    tft.drawString("No TVs yet. Turn the TV on and tap Scan.", tft.width() / 2, rowCount * ROW_H + 24, 2);
   }
 }
 
