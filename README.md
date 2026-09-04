@@ -49,10 +49,6 @@ CH340 USB-serial chip. Both the micro-USB and the dual-USB variants work.
 Nothing else is needed. A 3D-printed case is a nice touch; there are many on
 Printables and Thingiverse for this board.
 
-Brian Lough's [ESP32-Cheap-Yellow-Display](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display)
-is the definitive reference for the board: pinouts, variants, wiring notes, and
-a big list of projects and cases. Start there if you are new to the CYD.
-
 ## Quick start
 
 1. Install [PlatformIO Core](https://platformio.org/install/cli). On a Mac:
@@ -181,8 +177,6 @@ waits for it to boot before sending anything.
 - [lgtvremote-cli](https://github.com/griches/lgtvremote-cli), the Python CLI
   whose pairing manifest and protocol this project shares.
 - *Smart Remote+*, whose actions and artwork this remote reproduces.
-- [ESP32-Cheap-Yellow-Display](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display),
-  the community reference for this board.
 
 ## Support
 
