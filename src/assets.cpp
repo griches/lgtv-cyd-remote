@@ -9843,7 +9843,27 @@ const uint16_t app_com_bskyb_skystore[4096] PROGMEM = {
   0x098E,0x098E,0x098E,0x098E,0x098E,0x094C,0x090A,0x00A6,0x0021,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,
 };
 
-const AppArt APP_ART[APP_ART_COUNT] = {
+const IconEntry ICONS[ICON_COUNT] = {
+  {"power", ic_power},
+  {"vol_up", ic_vol_up},
+  {"vol_down", ic_vol_down},
+  {"unmuted", ic_unmuted},
+  {"muted", ic_muted},
+  {"up", ic_up},
+  {"down", ic_down},
+  {"left", ic_left},
+  {"right", ic_right},
+  {"ok", ic_ok},
+  {"back", ic_back},
+  {"home", ic_home},
+  {"exit", ic_exit},
+  {"settings", ic_settings},
+  {"play", ic_play},
+  {"pause", ic_pause},
+  {"screen_off", ic_screen_off},
+  {"screen_on", ic_screen_on},
+  {"input", ic_input},
+  {"key_blank", ic_key_blank},
   {"netflix", app_netflix},
   {"youtube.leanback.v4", app_youtube_leanback_v4},
   {"com.disney.disneyplus-prod", app_com_disney_disneyplus_prod},

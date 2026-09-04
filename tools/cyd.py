@@ -17,7 +17,16 @@ The panel returns each readback row shifted by one byte; corrected here.
 """
 import sys, time, argparse, serial
 
+def find_port():
+    import glob
+    ports = sorted(glob.glob("/dev/cu.usbserial*") + glob.glob("/dev/ttyUSB*") + glob.glob("/dev/cu.wchusbserial*"))
+    if not ports:
+        sys.exit("no USB serial port found")
+    return ports[0]
+
 def open_port(port, baud):
+    if port == "auto":
+        port = find_port()
     s = serial.Serial(timeout=0.2)
     s.port, s.baudrate = port, baud
     s.dtr = False; s.rts = False
@@ -79,7 +88,7 @@ def shot(s, path, shift=1):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmds", nargs="+")
-    ap.add_argument("--port", default="/dev/cu.usbserial-11310")
+    ap.add_argument("--port", default="auto")
     ap.add_argument("--baud", type=int, default=460800)
     ap.add_argument("--wait", type=float, default=1.0, help="seconds to listen after each command")
     a = ap.parse_args()

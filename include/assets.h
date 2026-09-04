@@ -30,10 +30,6 @@ extern const uint16_t ic_key_blank[4096] PROGMEM;
 #define KEY_GLYPH_COLOUR 0xEF3B
 
 // App art, keyed by webOS app id
-struct AppArt { const char* id; const uint16_t* icon; };
-#define APP_ART_COUNT 18
-extern const AppArt APP_ART[APP_ART_COUNT];
-
 extern const uint16_t app_netflix[4096] PROGMEM;
 extern const uint16_t app_youtube_leanback_v4[4096] PROGMEM;
 extern const uint16_t app_com_disney_disneyplus_prod[4096] PROGMEM;
@@ -52,3 +48,8 @@ extern const uint16_t app_airplay[4096] PROGMEM;
 extern const uint16_t app_com_webos_app_photovideo[4096] PROGMEM;
 extern const uint16_t app_com_webos_app_music[4096] PROGMEM;
 extern const uint16_t app_com_bskyb_skystore[4096] PROGMEM;
+
+// Icon registry for layouts: action icons by short name, app art by app id
+struct IconEntry { const char* name; const uint16_t* icon; };
+#define ICON_COUNT 38
+extern const IconEntry ICONS[ICON_COUNT];

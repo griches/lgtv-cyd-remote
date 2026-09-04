@@ -4,10 +4,13 @@
 Reads 144x144 key art from the lgtv-streamdeck plugin, composites it over
 black, resizes to ICON px, and writes src/assets.cpp + include/assets.h.
 """
-import sys, pathlib
+import os, sys, pathlib
 from PIL import Image
 
-PLUGIN = pathlib.Path("/Users/garyriches/Documents/.Source.nosync/lgtv-streamdeck/mobi.bouncingball.smartremote.sdPlugin/imgs")
+# Path to the lgtv-streamdeck plugin's imgs folder (override with LGTV_PLUGIN_IMGS).
+PLUGIN = pathlib.Path(os.environ.get(
+    "LGTV_PLUGIN_IMGS",
+    "/Users/garyriches/Documents/.Source.nosync/lgtv-streamdeck/mobi.bouncingball.smartremote.sdPlugin/imgs"))
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ICON = 64
 RADIUS = 12   # rounded-corner radius at ICON px, applied to every tile (the screen bg is black)
@@ -138,13 +141,16 @@ def main():
         g = key_style()[3]
         h.write(f"#define KEY_GLYPH_COLOUR 0x{((g[0] & 0xF8) << 8) | ((g[1] & 0xFC) << 3) | (g[2] >> 3):04X}\n")
         h.write("\n// App art, keyed by webOS app id\n")
-        h.write("struct AppArt { const char* id; const uint16_t* icon; };\n")
-        h.write(f"#define APP_ART_COUNT {len(APPS)}\nextern const AppArt APP_ART[APP_ART_COUNT];\n\n")
         for app in APPS:
             emit(cpp, h, cname(app), to_rgb565(PLUGIN / "apps" / f"{app}.png"))
-        cpp.write("const AppArt APP_ART[APP_ART_COUNT] = {\n")
-        for app in APPS:
-            cpp.write(f'  {{"{app}", {cname(app)}}},\n')
+        # Registry: every icon by name (action icons by short name, app art by app id)
+        names = [(ident[3:], ident) for ident, _ in ACTIONS] + [("key_blank", "ic_key_blank")] + [(app, cname(app)) for app in APPS]
+        h.write("\n// Icon registry for layouts: action icons by short name, app art by app id\n")
+        h.write("struct IconEntry { const char* name; const uint16_t* icon; };\n")
+        h.write(f"#define ICON_COUNT {len(names)}\nextern const IconEntry ICONS[ICON_COUNT];\n")
+        cpp.write("const IconEntry ICONS[ICON_COUNT] = {\n")
+        for name, ident in names:
+            cpp.write(f'  {{"{name}", {ident}}},\n')
         cpp.write("};\n")
     total = (len(ACTIONS) + 1 + len(APPS)) * ICON * ICON * 2
     print(f"wrote {len(ACTIONS)} action icons + blank key + {len(APPS)} app icons ({total // 1024} KB) -> {src.relative_to(ROOT)}, {inc.relative_to(ROOT)}")

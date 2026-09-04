@@ -15,12 +15,16 @@
 #include <XPT2046_Touchscreen.h>
 
 #include "assets.h"
+#include "layout.h"
 #include "lgtv.h"
 #include "log.h"
 #include "secrets.h"
 #include "tvstore.h"
 
 // ------------------------------------------------------------- hardware
+
+// The Arduino loop task defaults to 8 KB; JSON layouts and the web server want more.
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
 static TFT_eSPI tft;
 static SPIClass touchSPI(VSPI);
@@ -43,87 +47,16 @@ static const uint16_t TILE_BG = 0x18E3;           // dark tile for text buttons
 static const uint16_t ACCENT = 0x3D9F;            // blue
 static const uint16_t GREEN = 0x2E8B;
 
-enum class Dyn : uint8_t { None, Mute, Play, Screen, Input };
+static int page = 0;
 
-struct Tile {
-  const uint16_t* icon;
-  const uint16_t* iconAlt;  // shown when the dynamic state is "on"
-  CmdType cmd;
-  const char* a;
-  const char* b;
-  Dyn dyn;
-  bool repeat;              // auto-repeat while held
-};
-
-#define T_REQ(icon, uri)        {icon, nullptr, CmdType::Request, uri, "", Dyn::None, false}
-#define T_REQR(icon, uri)       {icon, nullptr, CmdType::Request, uri, "", Dyn::None, true}
-#define T_REQP(icon, uri, json) {icon, nullptr, CmdType::Request, uri, json, Dyn::None, false}
-// Input tile: blank key + the TV's label for the input; a = input id
-#define T_INPUT(id)             {ic_key_blank, nullptr, CmdType::Request, id, "", Dyn::Input, false}
-#define T_BTN(icon, name)       {icon, nullptr, CmdType::Button, name, "", Dyn::None, true}
-#define T_BTN1(icon, name)      {icon, nullptr, CmdType::Button, name, "", Dyn::None, false}
-#define T_APP(icon, id)         {icon, nullptr, CmdType::LaunchApp, id, "", Dyn::None, false}
-#define T_NONE                  {nullptr, nullptr, CmdType::None, "", "", Dyn::None, false}
-
-struct Page { const char* name; Tile tiles[COLS * ROWS]; };
-
-static const Page PAGES[] = {
-  {"Remote", {
-    {ic_power, nullptr, CmdType::PowerToggle, "", "", Dyn::None, false},
-    T_BTN(ic_up, "UP"),
-    {ic_unmuted, ic_muted, CmdType::MuteToggle, "", "", Dyn::Mute, false},
-    T_REQR(ic_vol_up, "ssap://audio/volumeUp"),
-
-    T_BTN(ic_left, "LEFT"),
-    T_BTN1(ic_ok, "ENTER"),
-    T_BTN(ic_right, "RIGHT"),
-    T_REQR(ic_vol_down, "ssap://audio/volumeDown"),
-
-    T_BTN1(ic_back, "BACK"),
-    T_BTN(ic_down, "DOWN"),
-    T_BTN1(ic_home, "HOME"),
-    {ic_play, ic_pause, CmdType::PlayPause, "", "", Dyn::Play, false},
-  }},
-  {"Apps", {
-    T_APP(app_netflix, "netflix"),
-    T_APP(app_youtube_leanback_v4, "youtube.leanback.v4"),
-    T_APP(app_com_disney_disneyplus_prod, "com.disney.disneyplus-prod"),
-    T_APP(app_amazon, "amazon"),
-
-    T_APP(app_com_apple_appletv, "com.apple.appletv"),
-    T_APP(app_bbc_iplayer_3_0, "bbc.iplayer.3.0"),
-    T_APP(app_com_fvp_itv, "com.fvp.itv"),
-    T_APP(app_com_channel4_ondemand, "com.channel4.ondemand"),
-
-    T_APP(app_demand5, "demand5"),
-    T_APP(app_now_tv, "now.tv"),
-    T_APP(app_spotify_beehive, "spotify-beehive"),
-    T_APP(app_plex, "plex"),
-  }},
-  {"Extras", {
-    T_BTN1(ic_settings, "MENU"),
-    T_BTN1(ic_exit, "EXIT"),
-    {ic_screen_off, ic_screen_on, CmdType::ScreenToggle, "", "", Dyn::Screen, false},
-    T_APP(app_airplay, "airplay"),
-
-    T_INPUT("HDMI_1"),
-    T_INPUT("HDMI_2"),
-    T_INPUT("HDMI_3"),
-    T_INPUT("HDMI_4"),
-
-    T_APP(app_com_webos_app_livetv, "com.webos.app.livetv"),
-    T_APP(app_com_webos_app_photovideo, "com.webos.app.photovideo"),
-    T_APP(app_com_webos_app_music, "com.webos.app.music"),
-    T_APP(app_com_bskyb_skystore, "com.bskyb.skystore"),
-  }},
-};
-static const int PAGE_COUNT = sizeof(PAGES) / sizeof(PAGES[0]);
+// Pages and tiles come from layout::current (JSON in NVS, default compiled in).
+#define PAGE_COUNT (layout::current.pageCount)
+static inline const TileDef& tileAt(int idx) { return layout::current.pages[page].tiles[idx]; }
 
 // ---------------------------------------------------------------- state
 
 enum class Mode : uint8_t { Grid, TVList, Keypad };
 static Mode mode = Mode::Grid;
-static int page = 0;
 static int pressedTile = -1;        // grid: index in current page, -1 = none
 static uint32_t pressStart = 0, lastRepeat = 0;
 
@@ -149,13 +82,17 @@ static uint32_t errorFlashUntil = 0;
 
 // ------------------------------------------------------------- helpers
 
-static bool dynOn(Dyn d) {
-  switch (d) {
-    case Dyn::Mute:   return lg.muted.load();
-    case Dyn::Play:   return lg.playing.load();
-    case Dyn::Screen: return lg.screenOff.load();
-    default:          return false;
+static bool dynOn(const TileDef& t) {
+  switch (t.kind) {
+    case TileKind::Mute:      return lg.muted.load();
+    case TileKind::PlayPause: return lg.playing.load();
+    case TileKind::Screen:    return lg.screenOff.load();
+    default:                  return false;
   }
+}
+
+static bool tileIsDynamic(const TileDef& t) {
+  return t.kind == TileKind::Mute || t.kind == TileKind::PlayPause || t.kind == TileKind::Screen || t.kind == TileKind::Input;
 }
 
 static uint16_t linkColour(LinkState ls) {
@@ -177,12 +114,8 @@ static void textButton(int x, int y, int w, int h, const char* label, uint16_t b
 
 // ---------------------------------------------------------- grid view
 
-// Draw the TV's name for an input, centred on a blank key, up to two lines.
-static void drawInputLabel(const char* id, int ix, int iy) {
-  InputInfo in;
-  char label[24];
-  if (lg.getInput(id, in)) strlcpy(label, in.label, sizeof(label));
-  else snprintf(label, sizeof(label), "HDMI %c", id[strlen(id) - 1]);  // "HDMI_3" -> "HDMI 3"
+// Draw text centred on a blank key, large if it fits, else up to two lines.
+static void drawKeyLabel(const char* label, int ix, int iy, bool connectedDot) {
 
   const int maxW = ICON_W - 8;
   tft.setTextDatum(MC_DATUM);
@@ -200,7 +133,22 @@ static void drawInputLabel(const char* id, int ix, int iy) {
   int cx = ix + ICON_W / 2, cy = iy + ICON_H / 2;
   if (l2.length()) { tft.drawString(l1, cx, cy - 8, font); tft.drawString(l2, cx, cy + 9, font); }
   else tft.drawString(l1, cx, cy, font);
-  if (in.id[0] && in.connected) tft.fillCircle(ix + ICON_W - 10, iy + 10, 2, TFT_GREEN);
+  if (connectedDot) tft.fillCircle(ix + ICON_W - 10, iy + 10, 2, TFT_GREEN);
+}
+
+// Label for a tile drawn as a blank key: input tiles use the TV's own name.
+static void drawTileLabel(const TileDef& t, const char* fallback, int ix, int iy) {
+  if (t.kind == TileKind::Input && !t.label[0]) {
+    InputInfo in;
+    char label[24];
+    bool conn = false;
+    if (lg.getInput(t.arg, in)) { strlcpy(label, in.label, sizeof(label)); conn = in.connected; }
+    else if (!strncmp(t.arg, "HDMI_", 5)) snprintf(label, sizeof(label), "HDMI %s", t.arg + 5);
+    else strlcpy(label, t.arg, sizeof(label));
+    drawKeyLabel(label, ix, iy, conn);
+    return;
+  }
+  drawKeyLabel(fallback, ix, iy, false);
 }
 
 static void tileRect(int idx, int& x, int& y) {
@@ -209,17 +157,18 @@ static void tileRect(int idx, int& x, int& y) {
 }
 
 static void drawTile(int idx, bool highlight) {
-  const Tile& t = PAGES[page].tiles[idx];
+  const TileDef& t = tileAt(idx);
   int x, y;
   tileRect(idx, x, y);
   tft.fillRect(x, y, CELL_W, CELL_H, BG);
-  if (!t.icon) return;
-  const uint16_t* icon = (t.iconAlt && dynOn(t.dyn)) ? t.iconAlt : t.icon;
+  if (t.kind == TileKind::None) return;
+  const char* label = nullptr;
+  const uint16_t* icon = layout::tileIcon(t, dynOn(t), &label);
   int ix = x + (CELL_W - ICON_W) / 2, iy = y + (CELL_H - ICON_H) / 2;
-  tft.pushImage(ix, iy, ICON_W, ICON_H, icon);
-  if (t.dyn == Dyn::Input) drawInputLabel(t.a, ix, iy);
+  tft.pushImage(ix, iy, ICON_W, ICON_H, icon ? icon : ic_key_blank);
+  if (!icon) drawTileLabel(t, label, ix, iy);
   if (highlight) {
-    bool usable = lg.link.load() == LinkState::Registered || t.cmd == CmdType::PowerToggle;
+    bool usable = lg.link.load() == LinkState::Registered || t.kind == TileKind::Power;
     uint16_t c = usable ? TFT_WHITE : TFT_RED;
     tft.drawRoundRect(ix - 3, iy - 3, ICON_W + 6, ICON_H + 6, 8, c);
     tft.drawRoundRect(ix - 4, iy - 4, ICON_W + 8, ICON_H + 8, 9, c);
@@ -374,7 +323,7 @@ static void drawBar() {
   tft.setTextDatum(MR_DATUM);
   tft.setTextColor(TFT_LIGHTGREY, BAR_BG);
   char right[32];
-  if (mode == Mode::Grid) snprintf(right, sizeof(right), "%s  %d/%d >", PAGES[page].name, page + 1, PAGE_COUNT);
+  if (mode == Mode::Grid) snprintf(right, sizeof(right), "%s  %d/%d >", layout::current.pages[page].name, page + 1, PAGE_COUNT);
   else snprintf(right, sizeof(right), mode == Mode::TVList ? "Back" : "Cancel");
   tft.drawString(right, tft.width() - 6, BAR_Y + BAR_H / 2, 2);
 }
@@ -392,19 +341,23 @@ static void setMode(Mode m) {
 
 // --------------------------------------------------------------- input
 
-static void fire(const Tile& t) {
-  if (t.dyn == Dyn::Input) {
-    char payload[40];
-    snprintf(payload, sizeof(payload), "{\"inputId\":\"%s\"}", t.a);
-    lg.post(CmdType::Request, "ssap://tv/switchInput", payload);
-    return;
-  }
-  switch (t.cmd) {
-    case CmdType::None: return;
-    case CmdType::Request:    lg.post(CmdType::Request, t.a, t.b); break;
-    case CmdType::Button:     lg.post(CmdType::Button, t.a); break;
-    case CmdType::LaunchApp:  lg.post(CmdType::LaunchApp, t.a); break;
-    default:                  lg.post(t.cmd); break;
+static void fire(const TileDef& t) {
+  char payload[64];
+  switch (t.kind) {
+    case TileKind::Power:      lg.post(CmdType::PowerToggle); break;
+    case TileKind::Button:     lg.post(CmdType::Button, t.arg); break;
+    case TileKind::Ssap:       lg.post(CmdType::Request, t.arg, t.payload); break;
+    case TileKind::App:        lg.post(CmdType::LaunchApp, t.arg); break;
+    case TileKind::Input:
+      snprintf(payload, sizeof(payload), "{\"inputId\":\"%s\"}", t.arg);
+      lg.post(CmdType::Request, "ssap://tv/switchInput", payload);
+      break;
+    case TileKind::Mute:       lg.post(CmdType::MuteToggle); break;
+    case TileKind::PlayPause:  lg.post(CmdType::PlayPause); break;
+    case TileKind::Screen:     lg.post(CmdType::ScreenToggle); break;
+    case TileKind::VolumeUp:   lg.post(CmdType::Request, "ssap://audio/volumeUp"); break;
+    case TileKind::VolumeDown: lg.post(CmdType::Request, "ssap://audio/volumeDown"); break;
+    default: break;
   }
 }
 
@@ -425,8 +378,8 @@ static void onPressGrid(int x, int y) {
   }
   int idx = (y / CELL_H) * COLS + (x / CELL_W);
   if (idx < 0 || idx >= COLS * ROWS) return;
-  const Tile& t = PAGES[page].tiles[idx];
-  if (!t.icon) return;
+  const TileDef& t = tileAt(idx);
+  if (t.kind == TileKind::None) return;
   pressedTile = idx;
   pressStart = lastRepeat = millis();
   drawTile(idx, true);
@@ -502,7 +455,7 @@ static void onPress(int x, int y) {
 
 static void onHold() {
   if (mode != Mode::Grid || pressedTile < 0) return;
-  const Tile& t = PAGES[page].tiles[pressedTile];
+  const TileDef& t = tileAt(pressedTile);
   if (!t.repeat) return;
   uint32_t now = millis();
   if (now - pressStart > 450 && now - lastRepeat > 180) {
@@ -574,6 +527,7 @@ static void handleSerial() {
     line[n] = 0; n = 0;
     if (!line[0]) continue;
     if (!strcmp(line, "scan")) { lg.post(CmdType::Scan); continue; }
+    if (!strcmp(line, "layout reset")) { layout::resetDefault(); continue; }
     if (!strncmp(line, "pair ", 5)) { startPairing(line + 5, "LG TV"); continue; }
     if (!strncmp(line, "pin ", 4)) { strlcpy(pin, line + 4, sizeof(pin)); pkState = PK_Checking; lg.post(CmdType::SubmitPin, pin); if (mode == Mode::Keypad) drawKeypad(); continue; }
     char* arg = line + 1;
@@ -645,9 +599,15 @@ static void syncState() {
     if (pkState == PK_Done && millis() - pkDoneAt > 1200) { setMode(Mode::Grid); return; }
   }
 
-  if (mode == Mode::Grid && gridDirty) {
+  static uint32_t shownLayoutGen = 0;
+  if (layout::generation != shownLayoutGen) {
+    shownLayoutGen = layout::generation;
+    if (page >= PAGE_COUNT) page = 0;
+    if (mode == Mode::Grid) { drawGrid(); barDirty = true; }
+    gridDirty = false;
+  } else if (mode == Mode::Grid && gridDirty) {
     for (int i = 0; i < COLS * ROWS; i++)
-      if (PAGES[page].tiles[i].dyn != Dyn::None) drawTile(i, i == pressedTile);
+      if (tileIsDynamic(tileAt(i))) drawTile(i, i == pressedTile);
   }
   if (mode == Mode::TVList && listDirty) drawList();
   if (mode == Mode::Keypad && keypadDirty) drawKeypad();
@@ -675,6 +635,7 @@ void setup() {
   touch.setRotation(1);
 
   store.begin();
+  layout::begin();
   drawGrid();
   drawBar();
 
