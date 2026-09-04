@@ -4,6 +4,9 @@ A standalone Wi-Fi remote for LG webOS TVs, running on the £10 **ESP32-2432S028
 ("Cheap Yellow Display"): a 2.8" touchscreen with an ESP32 behind it. No hub, no
 phone, no app on the TV. Pair once, then tap.
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Support on Ko-fi](https://img.shields.io/badge/Support-Ko--fi-ff5e5b.svg)](https://ko-fi.com/garybbgames)
+
 ![Remote page](docs/remote.png)
 
 It is a port of the *Smart Remote+* Stream Deck plugin to hardware: the same
@@ -175,6 +178,12 @@ waits for it to boot before sending anything.
   whose pairing manifest and protocol this project shares.
 - *Smart Remote+*, the Stream Deck plugin whose actions and artwork this
   remote reproduces.
+
+## Support
+
+If this saved you a remote or an afternoon, you can buy me a coffee at
+**[ko-fi.com/garybbgames](https://ko-fi.com/garybbgames)**. Stars on the repo
+and pull requests are just as welcome.
 
 ## Licence
 
