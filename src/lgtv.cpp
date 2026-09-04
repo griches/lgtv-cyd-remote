@@ -4,6 +4,8 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <mbedtls/base64.h>
 
 static const char* TAG = "[lgtv]";
 
@@ -45,6 +47,175 @@ bool LGTV::getInput(const char* id, InputInfo& out) {
   for (int i = 0; i < inputCount_; i++) if (!strcmp(inputs_[i].id, id)) { out = inputs_[i]; ok = true; break; }
   xSemaphoreGive(foundMtx_);
   return ok;
+}
+
+int LGTV::inputCount() {
+  xSemaphoreTake(foundMtx_, portMAX_DELAY);
+  int n = inputCount_;
+  xSemaphoreGive(foundMtx_);
+  return n;
+}
+
+bool LGTV::getInputAt(int i, InputInfo& out) {
+  xSemaphoreTake(foundMtx_, portMAX_DELAY);
+  bool ok = i >= 0 && i < inputCount_;
+  if (ok) out = inputs_[i];
+  xSemaphoreGive(foundMtx_);
+  return ok;
+}
+
+int LGTV::appCount() {
+  xSemaphoreTake(foundMtx_, portMAX_DELAY);
+  int n = appCount_;
+  xSemaphoreGive(foundMtx_);
+  return n;
+}
+
+bool LGTV::getAppAt(int i, AppInfo& out) {
+  xSemaphoreTake(foundMtx_, portMAX_DELAY);
+  bool ok = apps_ && i >= 0 && i < appCount_;
+  if (ok) out = apps_[i];
+  xSemaphoreGive(foundMtx_);
+  return ok;
+}
+
+// A Stream over one WebSocket frame's payload, so ArduinoJson can parse a
+// 200 KB listApps reply straight off the socket with a filter, never holding
+// it in RAM. (The WebSockets library caps frames at 15 KB.)
+class FrameStream : public Stream {
+ public:
+  FrameStream(WiFiClient& c, size_t len) : c_(c), left_(len) {}
+  int available() override { return left_ ? c_.available() : 0; }
+  int read() override {
+    if (!left_) return -1;
+    uint32_t t0 = millis();
+    while (!c_.available()) { if (!c_.connected() || millis() - t0 > 3000) return -1; delay(1); }
+    left_--;
+    return c_.read();
+  }
+  int peek() override { return left_ ? c_.peek() : -1; }
+  size_t write(uint8_t) override { return 0; }
+  size_t remaining() const { return left_; }
+ private:
+  WiFiClient& c_;
+  size_t left_;
+};
+
+static bool wsSendText(WiFiClient& c, const String& text) {
+  uint8_t hdr[14]; int n = 0;
+  hdr[n++] = 0x81;
+  size_t len = text.length();
+  if (len < 126) hdr[n++] = 0x80 | len;
+  else if (len < 65536) { hdr[n++] = 0x80 | 126; hdr[n++] = len >> 8; hdr[n++] = len & 0xFF; }
+  else { hdr[n++] = 0x80 | 127; for (int i = 7; i >= 0; i--) hdr[n++] = (uint64_t)len >> (i * 8); }
+  uint8_t mask[4] = {(uint8_t)random(256), (uint8_t)random(256), (uint8_t)random(256), (uint8_t)random(256)};
+  memcpy(hdr + n, mask, 4); n += 4;
+  if (c.write(hdr, n) != (size_t)n) return false;
+  uint8_t buf[256];
+  for (size_t i = 0; i < len; i += sizeof(buf)) {
+    size_t k = min(sizeof(buf), len - i);
+    for (size_t j = 0; j < k; j++) buf[j] = text[i + j] ^ mask[(i + j) & 3];
+    if (c.write(buf, k) != k) return false;
+  }
+  return true;
+}
+
+// Read one frame header; returns opcode (or -1) and payload length.
+static int wsReadHeader(WiFiClient& c, size_t& len, uint32_t timeoutMs) {
+  uint32_t t0 = millis();
+  auto rd = [&](uint8_t& b) { while (!c.available()) { if (!c.connected() || millis() - t0 > timeoutMs) return false; delay(1); } b = c.read(); return true; };
+  uint8_t b0, b1;
+  if (!rd(b0) || !rd(b1)) return -1;
+  len = b1 & 0x7F;
+  if (len == 126) { uint8_t h, l; if (!rd(h) || !rd(l)) return -1; len = (h << 8) | l; }
+  else if (len == 127) { len = 0; for (int i = 0; i < 8; i++) { uint8_t x; if (!rd(x)) return -1; len = (len << 8) | x; } }
+  if (b1 & 0x80) { uint8_t m; for (int i = 0; i < 4; i++) if (!rd(m)) return -1; }  // server frames are unmasked
+  return b0 & 0x0F;
+}
+
+static void wsSkip(WiFiClient& c, size_t len) { FrameStream fs(c, len); while (fs.remaining() && fs.read() >= 0) {} }
+
+void LGTV::fetchApps() {
+  if (appsLoading.load() || link.load() != LinkState::Registered) return;
+  appsLoading = true;
+  // Free the pointer socket's TLS session first: three TLS contexts is too many.
+  if (ptrBegun_) { ptr_.disconnect(); ptrBegun_ = false; ptrOpen_ = false; }
+
+  WiFiClientSecure tls;
+  WiFiClient plain;
+  WiFiClient* c;
+  if (useTls_) { tls.setInsecure(); tls.setTimeout(5); c = &tls; } else c = &plain;
+  LOGF("%s apps: opening private socket (heap %u)\n", TAG, ESP.getFreeHeap());
+  if (!c->connect(cur_.ip, useTls_ ? 3001 : 3000)) { LOGF("%s apps: connect failed\n", TAG); appsLoading = false; return; }
+
+  uint8_t rnd[16]; for (auto& r : rnd) r = random(256);
+  unsigned char key[32]; size_t klen = 0;
+  mbedtls_base64_encode(key, sizeof(key), &klen, rnd, 16);
+  String hs = "GET / HTTP/1.1\r\nHost: "; hs += cur_.ip; hs += "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ";
+  hs += String((char*)key, klen); hs += "\r\nSec-WebSocket-Version: 13\r\n\r\n";
+  c->print(hs);
+  String resp; uint32_t t0 = millis();
+  while (millis() - t0 < 5000 && !resp.endsWith("\r\n\r\n")) { while (c->available()) resp += (char)c->read(); delay(1); }
+  if (!resp.startsWith("HTTP/1.1 101")) { LOGF("%s apps: handshake failed\n", TAG); c->stop(); appsLoading = false; return; }
+
+  // Register with the stored key, then wait for "registered".
+  {
+    String reg;
+    reg.reserve(strlen_P(LG_MANIFEST) + 200);
+    reg += F("{\"type\":\"register\",\"id\":\"r\",\"payload\":{\"client-key\":\""); reg += cur_.clientKey;
+    reg += F("\",\"pairingType\":\"prompt\",\"forcePairing\":false,\"manifest\":"); reg += FPSTR(LG_MANIFEST); reg += F("}}");
+    wsSendText(*c, reg);
+  }
+  bool registered = false;
+  for (int i = 0; i < 6 && !registered; i++) {
+    size_t len; int op = wsReadHeader(*c, len, 6000);
+    if (op < 0) break;
+    if (op == 1 && len < 4096) {
+      String body; body.reserve(len);
+      FrameStream fs(*c, len); int ch; while ((ch = fs.read()) >= 0) body += (char)ch;
+      if (body.indexOf("\"registered\"") >= 0) registered = true;
+    } else wsSkip(*c, len);
+  }
+  if (!registered) { LOGF("%s apps: registration failed\n", TAG); c->stop(); appsLoading = false; return; }
+
+  wsSendText(*c, F("{\"type\":\"request\",\"id\":\"apps\",\"uri\":\"ssap://com.webos.applicationManager/listApps\"}"));
+  JsonDocument filter;
+  filter["payload"]["apps"][0]["id"] = true;
+  filter["payload"]["apps"][0]["title"] = true;
+  filter["payload"]["apps"][0]["visible"] = true;
+  JsonDocument doc;
+  bool parsed = false;
+  for (int i = 0; i < 4 && !parsed; i++) {
+    size_t len; int op = wsReadHeader(*c, len, 8000);
+    if (op < 0) break;
+    if (op != 1) { wsSkip(*c, len); continue; }
+    FrameStream fs(*c, len);
+    DeserializationError e = deserializeJson(doc, fs, DeserializationOption::Filter(filter));
+    if (e) { LOGF("%s apps: parse error %s after %u bytes\n", TAG, e.c_str(), (unsigned)(len - fs.remaining())); }
+    while (fs.remaining() && fs.read() >= 0) {}
+    parsed = !e && doc["payload"]["apps"].is<JsonArrayConst>();
+  }
+  c->stop();
+
+  if (!parsed) { LOGF("%s apps: no usable reply\n", TAG); appsLoading = false; return; }
+  if (!apps_) apps_ = (AppInfo*)calloc(MAX_APPS, sizeof(AppInfo));
+  xSemaphoreTake(foundMtx_, portMAX_DELAY);
+  appCount_ = 0;
+  if (apps_) {
+    for (JsonObjectConst a : doc["payload"]["apps"].as<JsonArrayConst>()) {
+      if (appCount_ >= MAX_APPS) break;
+      const char* id = a["id"] | ""; const char* title = a["title"] | "";
+      if (!*id || !*title) continue;
+      if (a["visible"].is<bool>() && !(a["visible"] | true)) continue;
+      AppInfo& ai = apps_[appCount_++];
+      strlcpy(ai.id, id, sizeof(ai.id)); strlcpy(ai.title, title, sizeof(ai.title));
+    }
+  }
+  int n = appCount_;
+  xSemaphoreGive(foundMtx_);
+  appsLoading = false;
+  appsGen++;
+  LOGF("%s %d apps from %s (heap %u)\n", TAG, n, cur_.name, ESP.getFreeHeap());
 }
 
 void LGTV::fetchInputs() {
@@ -558,14 +729,18 @@ void LGTV::handleCmd(const Cmd& c) {
       failStreak_ = 0;
       useTls_ = true;
       muted = false; playing = false; screenOff = false;
-      xSemaphoreTake(foundMtx_, portMAX_DELAY); inputCount_ = 0; xSemaphoreGive(foundMtx_);
-      inputsGen++;
+      xSemaphoreTake(foundMtx_, portMAX_DELAY); inputCount_ = 0; appCount_ = 0; xSemaphoreGive(foundMtx_);
+      inputsGen++; appsGen++;
       connectMain();
       break;
     }
 
     case CmdType::Scan:
       if (!scanning.load()) scan();
+      break;
+
+    case CmdType::FetchApps:
+      fetchApps();
       break;
 
     case CmdType::PairStart: {

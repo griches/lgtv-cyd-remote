@@ -42,6 +42,7 @@ extern const uint16_t app_demand5[4096] PROGMEM;
 extern const uint16_t app_now_tv[4096] PROGMEM;
 extern const uint16_t app_com_webos_app_igallery[4096] PROGMEM;
 extern const uint16_t app_spotify_beehive[4096] PROGMEM;
+extern const uint16_t app_cdp_30[4096] PROGMEM;
 extern const uint16_t app_plex[4096] PROGMEM;
 extern const uint16_t app_com_webos_app_livetv[4096] PROGMEM;
 extern const uint16_t app_airplay[4096] PROGMEM;
@@ -51,5 +52,5 @@ extern const uint16_t app_com_bskyb_skystore[4096] PROGMEM;
 
 // Icon registry for layouts: action icons by short name, app art by app id
 struct IconEntry { const char* name; const uint16_t* icon; };
-#define ICON_COUNT 38
+#define ICON_COUNT 39
 extern const IconEntry ICONS[ICON_COUNT];

@@ -43,7 +43,7 @@ APPS = [
     "netflix", "youtube.leanback.v4", "com.disney.disneyplus-prod", "amazon",
     "com.apple.appletv", "bbc.iplayer.3.0", "com.fvp.itv", "com.channel4.ondemand",
     "demand5", "now.tv", "com.webos.app.igallery", "spotify-beehive",
-    "plex",
+    "cdp-30", "plex",
     "com.webos.app.livetv", "airplay", "com.webos.app.photovideo", "com.webos.app.music",
     "com.bskyb.skystore",
 ]

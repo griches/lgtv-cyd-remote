@@ -38,7 +38,8 @@ main{display:grid;grid-template-columns:1fr 360px;gap:20px;padding:20px;max-widt
 .tile{background:#11141a;border:1px solid var(--line);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:5px}
 .tile img{width:48px;height:48px;border-radius:8px;background:#000;align-self:center}
 .tile select,.tile input{width:100%;background:#0b0d11;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:12px}
-.tile label{font-size:11px;color:var(--dim)}
+.tile label{font-size:11px;color:var(--dim)}.tile .tname{font-size:12px;text-align:center;min-height:16px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
 button.pri{background:var(--acc);color:#fff;border:0;padding:8px 14px;border-radius:8px;cursor:pointer}
 button.sec{background:#222632;color:var(--fg);border:1px solid var(--line);padding:8px 14px;border-radius:8px;cursor:pointer}
@@ -66,7 +67,7 @@ h2{font-size:15px;margin:0 0 10px}small{color:var(--dim)}
   <button class="sec danger" onclick="resetLayout()">Reset to default</button>
   <span class="msg" id="msg"></span>
  </div>
- <p><small>Kinds: <b>button</b> sends a remote key (UP, DOWN, LEFT, RIGHT, ENTER, BACK, HOME, MENU, EXIT…); <b>app</b> launches a webOS app id (picking an app icon fills it in); <b>input</b> switches to an input id (HDMI_1…) and shows the TV's own name for it; <b>ssap</b> sends any ssap:// URI with an optional JSON payload. Leave icon empty to pick art automatically; tiles without art show the label on a blank key.</small></p>
+ <p><small>Pick a kind, then what it should do. App and input lists come from the TV itself, so it needs to be on. Tiles with artwork show it; the rest show their name on a blank key. Icon and label are optional overrides.</small></p>
 </section>
 <aside style="display:flex;flex-direction:column;gap:20px">
  <section class="card"><h2>Live screen</h2><img id="shot" src="/screen.bmp" alt="screen">
@@ -80,35 +81,58 @@ h2{font-size:15px;margin:0 0 10px}small{color:var(--dim)}
 </aside>
 </main>
 <script>
-const KINDS=["none","power","button","ssap","app","input","mute","playpause","screen","volume_up","volume_down"];
-let L={pages:[]},cur=0,ICONS=[],APPIDS=[];
+const KINDS=[["none","Empty"],["power","Power"],["button","Remote key"],["app","App"],["input","Input"],["volume_up","Volume up"],["volume_down","Volume down"],["mute","Mute"],["playpause","Play / Pause"],["screen","Screen off"],["ssap","Raw SSAP request"]];
+const KEYS=["UP","DOWN","LEFT","RIGHT","ENTER","BACK","HOME","MENU","EXIT","INFO","GUIDE","CC","DASH","PLAY","PAUSE","STOP","REWIND","FASTFORWARD","CHANNELUP","CHANNELDOWN","VOLUMEUP","VOLUMEDOWN","MUTE","RED","GREEN","YELLOW","BLUE","0","1","2","3","4","5","6","7","8","9"];
+const KEYNAME={ENTER:"OK",CC:"Subtitles",DASH:"Dash (-)"};
+const ACTION_ICONS=["power","vol_up","vol_down","unmuted","muted","up","down","left","right","ok","back","home","exit","settings","play","pause","screen_off","screen_on","input","key_blank"];
+const AUTO={power:'power',mute:'unmuted',playpause:'play',screen:'screen_off',volume_up:'vol_up',volume_down:'vol_down'};
+const BTN={UP:'up',DOWN:'down',LEFT:'left',RIGHT:'right',ENTER:'ok',BACK:'back',HOME:'home',EXIT:'exit',MENU:'settings',PLAY:'play',PAUSE:'pause',VOLUMEUP:'vol_up',VOLUMEDOWN:'vol_down',MUTE:'unmuted'};
+let L={pages:[]},cur=0,ICONS=[],APPIDS=[],APPS=null,INPUTS=[];
 const $=id=>document.getElementById(id);
 function msg(t,c){const m=$('msg');m.textContent=t;m.className='msg '+(c||'');}
-const ACTION_ICONS=["power","vol_up","vol_down","unmuted","muted","up","down","left","right","ok","back","home","exit","settings","play","pause","screen_off","screen_on","input","key_blank"];
-async function load(){ICONS=await (await fetch('/api/icons')).json();APPIDS=ICONS.filter(n=>!ACTION_ICONS.includes(n));L=await (await fetch('/api/layout')).json();cur=Math.min(cur,L.pages.length-1);render();msg('');}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
+function opt(v,label,sel){return `<option value="${esc(v)}" ${sel?'selected':''}>${esc(label)}</option>`}
+async function load(){ICONS=await (await fetch('/api/icons')).json();APPIDS=ICONS.filter(n=>!ACTION_ICONS.includes(n));
+ try{INPUTS=(await (await fetch('/api/inputs')).json()).inputs||[]}catch(e){}
+ L=await (await fetch('/api/layout')).json();cur=Math.min(cur,L.pages.length-1);render();msg('');loadApps();}
+async function loadApps(){try{const r=await (await fetch('/api/apps')).json();if(r.loaded){APPS=r.apps.sort((a,b)=>a.title.localeCompare(b.title));render();}
+ else if(r.loading||r.connected){setTimeout(loadApps,1500)}}catch(e){}}
+function iconUrl(t){let n=t.icon;if(!n){if(AUTO[t.kind])n=AUTO[t.kind];else if(t.kind==='button')n=BTN[(t.arg||'').toUpperCase()];else if(t.kind==='app'&&APPIDS.includes(t.arg))n=t.arg;}
+ if(!n)n=t.kind==='none'?'':'key_blank';return n?'/icon/'+encodeURIComponent(n)+'.bmp':'data:image/gif;base64,R0lGODlhAQABAAAAACw=';}
+function appName(id){const a=APPS&&APPS.find(a=>a.id===id);return a?a.title:id}
+function argControl(t){
+ if(t.kind==='button'){const known=KEYS.includes((t.arg||'').toUpperCase());
+  return `<label>key</label><select data-k="arg">${opt('','— choose —',!t.arg)}${KEYS.map(k=>opt(k,KEYNAME[k]||k.charAt(0)+k.slice(1).toLowerCase(),t.arg===k)).join('')}${opt('__other','Other…',t.arg&&!known)}</select>${t.arg&&!known?`<input data-k="arg" value="${esc(t.arg)}" placeholder="key name">`:''}`}
+ if(t.kind==='app'){const ids=new Set((APPS||[]).map(a=>a.id));const list=APPS?APPS.map(a=>opt(a.id,a.title+(APPIDS.includes(a.id)?' ★':''),t.arg===a.id)).join(''):APPIDS.map(id=>opt(id,id+' ★',t.arg===id)).join('');
+  const known=ids.has(t.arg)||(!APPS&&APPIDS.includes(t.arg));
+  return `<label>app ${APPS?`<small>(${APPS.length} on the TV, ★ has artwork)</small>`:'<small>(loading the TV\'s app list…)</small>'}</label><select data-k="arg">${opt('','— choose —',!t.arg)}${list}${opt('__other','Other app id…',t.arg&&!known)}</select>${t.arg&&!known?`<input data-k="arg" value="${esc(t.arg)}" placeholder="app id">`:''}`}
+ if(t.kind==='input'){const ids=INPUTS.map(i=>i.id);const list=(INPUTS.length?INPUTS:[1,2,3,4].map(n=>({id:'HDMI_'+n,label:'HDMI '+n}))).map(i=>opt(i.id,i.label+' ('+i.id+')',t.arg===i.id)).join('');
+  const known=ids.includes(t.arg)||/^HDMI_[1-4]$/.test(t.arg||'');
+  return `<label>input <small>(names come from the TV)</small></label><select data-k="arg">${opt('','— choose —',!t.arg)}${list}${opt('__other','Other input id…',t.arg&&!known)}</select>${t.arg&&!known?`<input data-k="arg" value="${esc(t.arg)}" placeholder="input id">`:''}`}
+ if(t.kind==='ssap'){return `<label>uri</label><input data-k="arg" value="${esc(t.arg||'')}" placeholder="ssap://audio/volumeUp"><label>payload (JSON, optional)</label><input data-k="payload" value="${esc(t.payload||'')}" placeholder='{"volume":10}'>`}
+ return '';}
 function render(){const tabs=$('tabs');tabs.innerHTML='';L.pages.forEach((p,i)=>{const b=document.createElement('button');b.textContent=p.name||('Page '+(i+1));b.className=i===cur?'on':'';b.onclick=()=>{cur=i;render()};tabs.appendChild(b)});
  const p=L.pages[cur];$('pname').value=p.name||'';$('pname').oninput=e=>{p.name=e.target.value};
  const g=$('grid');g.innerHTML='';while(p.tiles.length<12)p.tiles.push({kind:'none'});
- p.tiles.forEach((t,i)=>{const d=document.createElement('div');d.className='tile';
-  d.innerHTML=`<img src="${iconUrl(t)}"><label>kind</label><select data-k="kind">${KINDS.map(k=>`<option ${t.kind===k?'selected':''}>${k}</option>`).join('')}</select>
-  <label>arg <small>(key / app id / input id / uri)</small></label><input data-k="arg" value="${esc(t.arg||'')}">
-  <label>icon</label><select data-k="icon"><option value="">auto</option>${ICONS.map(n=>`<option ${t.icon===n?'selected':''}>${n}</option>`).join('')}</select>
-  <label>label</label><input data-k="label" value="${esc(t.label||'')}" maxlength="23">
-  <label>payload (ssap)</label><input data-k="payload" value="${esc(t.payload||'')}">
-  <label><input type="checkbox" data-k="repeat" ${t.repeat?'checked':''}> repeat while held</label>`;
-  d.querySelectorAll('[data-k]').forEach(el=>{el.onchange=()=>{const k=el.dataset.k;t[k]=el.type==='checkbox'?el.checked:el.value;if(!t[k]&&k!=='repeat')delete t[k];
-   if(k==='icon'&&t.kind==='app'&&!t.arg&&APPIDS.includes(t.icon)){t.arg=t.icon;d.querySelector('[data-k=arg]').value=t.icon}
-   if(k==='kind'&&t.kind==='app'&&!t.arg&&APPIDS.includes(t.icon||'')){t.arg=t.icon;d.querySelector('[data-k=arg]').value=t.icon}
-   d.querySelector('img').src=iconUrl(t)}});
+ p.tiles.forEach((t,i)=>{const d=document.createElement('div');d.className='tile';const hasArt=iconUrl(t).startsWith('/icon/')&&!iconUrl(t).includes('key_blank');
+  d.innerHTML=`<img src="${iconUrl(t)}"><div class="tname">${t.kind==='app'?esc(appName(t.arg||'')):t.kind==='input'?esc((INPUTS.find(x=>x.id===t.arg)||{}).label||t.arg||''):esc(t.arg||'')}</div>
+  <label>kind</label><select data-k="kind">${KINDS.map(([k,n])=>opt(k,n,t.kind===k)).join('')}</select>
+  <div class="argc">${argControl(t)}</div>
+  ${t.kind!=='none'?`<label>icon</label><select data-k="icon">${opt('','auto',!t.icon)}${ICONS.map(n=>opt(n,n,t.icon===n)).join('')}</select>
+   <label>label <small>${hasArt?'(shown only without artwork)':'(drawn on the key)'}</small></label><input data-k="label" value="${esc(t.label||'')}" maxlength="23">
+   <label><input type="checkbox" data-k="repeat" ${t.repeat?'checked':''}> repeat while held</label>`:''}`;
+  d.querySelectorAll('[data-k]').forEach(el=>{el.onchange=()=>{const k=el.dataset.k;let v=el.type==='checkbox'?el.checked:el.value;
+   if(v==='__other'){t[k]='';render();const inp=g.children[i].querySelector('input[data-k=arg]');if(inp)inp.focus();return;}
+   t[k]=v;if(!t[k]&&k!=='repeat')delete t[k];
+   if(k==='kind'){delete t.arg;delete t.payload;if(!t.icon)delete t.icon;t.repeat=['volume_up','volume_down'].includes(v);}
+   if(k==='arg'&&t.kind==='button'&&['UP','DOWN','LEFT','RIGHT'].includes(v))t.repeat=true;
+   if(k==='kind'||k==='arg'||k==='icon')render();else d.querySelector('img').src=iconUrl(t)}});
   g.appendChild(d)});}
-function esc(s){return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;')}
-const AUTO={power:'power',mute:'unmuted',playpause:'play',screen:'screen_off',volume_up:'vol_up',volume_down:'vol_down'};
-const BTN={UP:'up',DOWN:'down',LEFT:'left',RIGHT:'right',ENTER:'ok',BACK:'back',HOME:'home',EXIT:'exit',MENU:'settings'};
-function iconUrl(t){let n=t.icon;if(!n){if(AUTO[t.kind])n=AUTO[t.kind];else if(t.kind==='button')n=BTN[(t.arg||'').toUpperCase()];else if(t.kind==='app'&&ICONS.includes(t.arg))n=t.arg;}
- if(!n)n=t.kind==='none'?'':'key_blank';return n?'/icon/'+encodeURIComponent(n)+'.bmp':'data:image/gif;base64,R0lGODlhAQABAAAAACw=';}
 function addPage(){if(L.pages.length>=6)return msg('Max 6 pages','bad');L.pages.push({name:'Page '+(L.pages.length+1),tiles:[]});cur=L.pages.length-1;render()}
 function delPage(){if(L.pages.length<=1)return msg('Keep at least one page','bad');if(!confirm('Delete this page?'))return;L.pages.splice(cur,1);cur=Math.max(0,cur-1);render()}
-async function save(){const r=await fetch('/api/layout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(L)});msg(r.ok?'Saved. The remote redrew itself.':'Rejected: '+await r.text(),r.ok?'ok':'bad');setTimeout(shot,600)}
+async function save(){const bad=L.pages.flatMap((p,pi)=>p.tiles.map((t,i)=>({t,pi,i}))).filter(x=>['button','app','input','ssap'].includes(x.t.kind)&&!x.t.arg);
+ if(bad.length){cur=bad[0].pi;render();return msg(`Tile ${bad[0].i+1} on "${L.pages[bad[0].pi].name}" needs a ${bad[0].t.kind==='button'?'key':bad[0].t.kind==='ssap'?'URI':bad[0].t.kind}.`,'bad')}
+ const r=await fetch('/api/layout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(L)});msg(r.ok?'Saved. The remote redrew itself.':'Rejected: '+await r.text(),r.ok?'ok':'bad');setTimeout(shot,600)}
 async function resetLayout(){if(!confirm('Restore the factory layout?'))return;await fetch('/api/layout/reset',{method:'POST'});await load();setTimeout(shot,600)}
 function shot(){$('shot').src='/screen.bmp?'+Date.now()}
 async function status(){try{const s=await (await fetch('/api/status')).json();$('status').textContent=`${s.tv||'no TV'} · ${s.link} · ${s.ip}`;
@@ -203,6 +227,28 @@ static void setupRoutes() {
     String out = "[";
     for (int i = 0; i < ICON_COUNT; i++) { if (i) out += ','; out += '"'; out += ICONS[i].name; out += '"'; }
     out += ']';
+    server.send(200, "application/json", out);
+  });
+
+  // Installed apps from the TV (fetched on first request; poll until loaded=true)
+  server.on("/api/apps", HTTP_GET, []() {
+    if (lg_->appCount() == 0 && !lg_->appsLoading.load()) lg_->post(CmdType::FetchApps);
+    JsonDocument doc;
+    doc["loaded"] = lg_->appCount() > 0;
+    doc["loading"] = lg_->appsLoading.load();
+    doc["connected"] = lg_->link.load() == LinkState::Registered;
+    JsonArray arr = doc["apps"].to<JsonArray>();
+    AppInfo a;
+    for (int i = 0; lg_->getAppAt(i, a); i++) { JsonObject o = arr.add<JsonObject>(); o["id"] = a.id; o["title"] = a.title; }
+    String out; serializeJson(doc, out);
+    server.send(200, "application/json", out);
+  });
+  server.on("/api/inputs", HTTP_GET, []() {
+    JsonDocument doc;
+    JsonArray arr = doc["inputs"].to<JsonArray>();
+    InputInfo in;
+    for (int i = 0; lg_->getInputAt(i, in); i++) { JsonObject o = arr.add<JsonObject>(); o["id"] = in.id; o["label"] = in.label; o["connected"] = in.connected; }
+    String out; serializeJson(doc, out);
     server.send(200, "application/json", out);
   });
 

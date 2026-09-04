@@ -28,6 +28,7 @@ enum class CmdType : uint8_t {
   SubmitPin,     // a = pin
   CancelPair,
   Forget,        // a = store index
+  FetchApps,     // ask the TV for its installed apps (for the web editor)
 };
 
 struct Cmd {
@@ -38,6 +39,7 @@ struct Cmd {
 
 struct FoundTV { char name[32]; char ip[16]; };
 struct InputInfo { char id[16]; char label[24]; bool connected; };
+struct AppInfo { char id[40]; char title[32]; };
 
 class LGTV {
  public:
@@ -62,6 +64,14 @@ class LGTV {
   // External inputs as the TV reports them (label = the user's name for it).
   std::atomic<uint32_t> inputsGen{0};
   bool getInput(const char* id, InputInfo& out);
+  int inputCount();
+  bool getInputAt(int i, InputInfo& out);
+
+  // Installed apps as the TV reports them (fetched on demand).
+  std::atomic<uint32_t> appsGen{0};
+  std::atomic<bool> appsLoading{false};
+  int appCount();
+  bool getAppAt(int i, AppInfo& out);
 
  private:
   using ResponseCb = std::function<void(bool ok, JsonObjectConst payload)>;
@@ -110,4 +120,8 @@ class LGTV {
   static const int MAX_INPUTS = 8;
   InputInfo inputs_[MAX_INPUTS];
   int inputCount_ = 0;
+  static const int MAX_APPS = 80;
+  AppInfo* apps_ = nullptr;   // allocated on first fetch
+  int appCount_ = 0;
+  void fetchApps();
 };
