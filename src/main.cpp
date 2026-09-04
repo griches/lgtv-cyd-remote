@@ -511,7 +511,7 @@ static void fire(const TileDef& t) {
     case TileKind::Power:      lg.post(CmdType::PowerToggle); break;
     case TileKind::Button:     lg.post(CmdType::Button, t.arg); break;
     case TileKind::Ssap:       lg.post(CmdType::Request, t.arg, t.payload); break;
-    case TileKind::App:        lg.post(CmdType::LaunchApp, t.arg); break;
+    case TileKind::App:        lg.post(CmdType::LaunchApp, t.arg[0] ? t.arg : t.icon); break;
     case TileKind::Input:
       snprintf(payload, sizeof(payload), "{\"inputId\":\"%s\"}", t.arg);
       lg.post(CmdType::Request, "ssap://tv/switchInput", payload);
