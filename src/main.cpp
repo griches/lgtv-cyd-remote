@@ -18,7 +18,7 @@
 #include "layout.h"
 #include "lgtv.h"
 #include "log.h"
-#include "secrets.h"
+#include "wifi_creds.h"
 #include "tvstore.h"
 #include "webui.h"
 
@@ -56,7 +56,7 @@ static inline const TileDef& tileAt(int idx) { return layout::current.pages[page
 
 // ---------------------------------------------------------------- state
 
-enum class Mode : uint8_t { Grid, TVList, Keypad };
+enum class Mode : uint8_t { Grid, TVList, Keypad, WifiList, Keyboard };
 static Mode mode = Mode::Grid;
 static int pressedTile = -1;        // grid: index in current page, -1 = none
 static uint32_t pressStart = 0, lastRepeat = 0;
@@ -73,6 +73,21 @@ static char pairName[32] = {0};
 static char pairIp[16] = {0};
 static enum { PK_Connecting, PK_Enter, PK_Checking, PK_Wrong, PK_Done } pkState = PK_Connecting;
 static uint32_t pkDoneAt = 0;
+
+// Wi-Fi setup
+static WifiCreds creds;
+static uint32_t wifiStartedAt = 0;
+static int wifiRowCount = 0;          // scan results shown (max 5)
+static bool wifiScanShown = false;
+static char kbSsid[33] = {0};
+static char kbText[65] = {0};
+static bool kbShift = false, kbSym = false;
+
+// Backlight
+static const int BL_CH = 0;
+static uint32_t lastTouchAt = 0;
+static bool dimmed = false;
+static const uint32_t DIM_AFTER_MS = 60000;
 
 // Snapshots of LGTV state so we redraw only on change.
 static LinkState shownLink = LinkState::NoWifi;
@@ -189,7 +204,7 @@ static int rowCount = 0;
 
 static void buildRows() {
   rowCount = 0;
-  int maxRows = GRID_H / ROW_H;  // 6
+  int maxRows = GRID_H / ROW_H - 1;  // 6 rows, last one is the Wi-Fi row
   int n = store.count();
   for (int i = 0; i < n && rowCount < maxRows - 1; i++) rows[rowCount++] = {ListRow::Stored, i};
   rows[rowCount++] = {ListRow::Scan, 0};
@@ -237,10 +252,25 @@ static void drawListRow(int r) {
   }
 }
 
+static void drawWifiRow() {
+  int y = GRID_H - ROW_H;
+  tft.fillRect(0, y, tft.width(), ROW_H, BG);
+  tft.drawFastHLine(6, y, tft.width() - 12, 0x2124);
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(TFT_LIGHTGREY, BG);
+  char t[48];
+  bool up = WiFi.status() == WL_CONNECTED;
+  snprintf(t, sizeof(t), "Wi-Fi: %s", creds.valid() ? creds.ssid : "not set");
+  tft.drawString(t, 12, y + ROW_H / 2, 2);
+  tft.fillCircle(tft.width() - 100, y + ROW_H / 2, 3, up ? TFT_GREEN : (creds.valid() ? TFT_YELLOW : TFT_DARKGREY));
+  textButton(tft.width() - 90, y + 5, 84, ROW_H - 10, "Change", 0x4208, TFT_WHITE);
+}
+
 static void drawList() {
   buildRows();
   tft.fillRect(0, 0, tft.width(), GRID_H, BG);
   for (int r = 0; r < rowCount; r++) drawListRow(r);
+  drawWifiRow();
   if (store.count() == 0 && lg.foundCount() == 0 && !lg.scanning.load()) {
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(TFT_LIGHTGREY, BG);
@@ -299,6 +329,130 @@ static void drawPinOnly() {
   tft.drawString(pin[0] ? pin : "", 8 + (KP_X - 16) / 2, 83, 4);
 }
 
+// ----------------------------------------------------------- Wi-Fi list
+
+static void startWifiScan() {
+  wifiScanShown = false;
+  WiFi.scanDelete();
+  WiFi.scanNetworks(true);  // async; results picked up in syncState
+}
+
+static void drawWifiList() {
+  tft.fillRect(0, 0, tft.width(), GRID_H, BG);
+  int n = WiFi.scanComplete();
+  wifiRowCount = 0;
+  if (n < 0) {
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(TFT_LIGHTGREY, BG);
+    tft.drawString("Scanning for networks...", tft.width() / 2, GRID_H / 2 - 20, 2);
+    return;
+  }
+  // strongest first, unique SSIDs
+  int order[32]; int cnt = min(n, 32);
+  for (int i = 0; i < cnt; i++) order[i] = i;
+  for (int i = 0; i < cnt; i++) for (int j = i + 1; j < cnt; j++)
+    if (WiFi.RSSI(order[j]) > WiFi.RSSI(order[i])) { int t = order[i]; order[i] = order[j]; order[j] = t; }
+  int shown = 0;
+  String seen[5];
+  for (int k = 0; k < cnt && shown < 5; k++) {
+    int i = order[k];
+    String ssid = WiFi.SSID(i);
+    if (!ssid.length()) continue;
+    bool dup = false;
+    for (int q = 0; q < shown; q++) if (seen[q] == ssid) dup = true;
+    if (dup) continue;
+    seen[shown] = ssid;
+    int y = shown * ROW_H;
+    bool cur = creds.valid() && ssid == creds.ssid;
+    if (cur) tft.fillRoundRect(2, y + 2, tft.width() - 4, ROW_H - 4, 6, TILE_BG);
+    // signal bars
+    int rssi = WiFi.RSSI(i);
+    int bars = rssi > -55 ? 4 : rssi > -65 ? 3 : rssi > -75 ? 2 : 1;
+    for (int b = 0; b < 4; b++) tft.fillRect(10 + b * 5, y + ROW_H / 2 + 6 - (b + 1) * 3, 3, (b + 1) * 3, b < bars ? TFT_GREEN : 0x4208);
+    tft.setTextDatum(ML_DATUM);
+    tft.setTextColor(TFT_WHITE, cur ? TILE_BG : BG);
+    tft.drawString(ssid, 36, y + ROW_H / 2, 2);
+    tft.setTextDatum(MR_DATUM);
+    tft.setTextColor(TFT_LIGHTGREY, cur ? TILE_BG : BG);
+    tft.drawString(WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "open" : "locked", tft.width() - 10, y + ROW_H / 2, 1);
+    shown++;
+  }
+  wifiRowCount = shown;
+  if (!shown) {
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(TFT_LIGHTGREY, BG);
+    tft.drawString("No networks found", tft.width() / 2, 40, 2);
+  }
+  textButton(6, GRID_H - ROW_H + 4, tft.width() - 12, ROW_H - 8, "Rescan", ACCENT, TFT_WHITE);
+}
+
+// -------------------------------------------------------------- keyboard
+
+static const int KB_Y = 40, KB_ROW_H = 44, KB_KEY_W = 32;
+static const char* KB_ROWS_LOWER[3] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
+static const char* KB_ROWS_SYM[3]   = {"1234567890", "-_/:;()&@\"", "#%^*+=.,?!"};
+
+static void kbRowGeom(int r, const char*& keys, int& x0) {
+  keys = kbSym ? KB_ROWS_SYM[r] : KB_ROWS_LOWER[r];
+  int n = strlen(keys);
+  x0 = (tft.width() - n * KB_KEY_W) / 2;
+  if (r == 2 && !kbSym) x0 = (tft.width() - 9 * KB_KEY_W) / 2 + KB_KEY_W;  // room for shift/backspace
+}
+
+static void drawKbField() {
+  tft.fillRect(0, 0, tft.width(), KB_Y, BG);
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(TFT_LIGHTGREY, BG);
+  tft.drawString(kbSsid, 8, 10, 1);
+  tft.fillRoundRect(6, 18, tft.width() - 12, 20, 4, TILE_BG);
+  tft.setTextColor(TFT_WHITE, TILE_BG);
+  String shown(kbText);
+  while (shown.length() && tft.textWidth(shown, 2) > tft.width() - 24) shown.remove(0, 1);
+  tft.drawString(shown + "_", 12, 28, 2);
+}
+
+static void drawKeyboard() {
+  tft.fillRect(0, 0, tft.width(), GRID_H, BG);
+  drawKbField();
+  char lbl[2] = {0, 0};
+  for (int r = 0; r < 3; r++) {
+    const char* keys; int x0;
+    kbRowGeom(r, keys, x0);
+    int y = KB_Y + r * KB_ROW_H;
+    for (int i = 0; keys[i]; i++) {
+      lbl[0] = kbShift && !kbSym ? toupper(keys[i]) : keys[i];
+      textButton(x0 + i * KB_KEY_W + 2, y + 2, KB_KEY_W - 4, KB_ROW_H - 4, lbl, TILE_BG, TFT_WHITE, 2);
+    }
+  }
+  int y2 = KB_Y + 2 * KB_ROW_H;
+  if (!kbSym) {
+    textButton(2, y2 + 2, 44, KB_ROW_H - 4, "shift", kbShift ? ACCENT : 0x4208, TFT_WHITE, 1);
+  }
+  textButton(tft.width() - 46, y2 + 2, 44, KB_ROW_H - 4, "<", 0x4208, TFT_WHITE, 2);
+  int y3 = KB_Y + 3 * KB_ROW_H;
+  textButton(2, y3 + 2, 60, KB_ROW_H - 4, kbSym ? "abc" : "?123", 0x4208, TFT_WHITE, 2);
+  textButton(66, y3 + 2, tft.width() - 66 - 72, KB_ROW_H - 4, "space", TILE_BG, TFT_LIGHTGREY, 2);
+  textButton(tft.width() - 70, y3 + 2, 68, KB_ROW_H - 4, "Join", ACCENT, TFT_WHITE, 2);
+}
+
+static void kbAppend(char c) {
+  size_t n = strlen(kbText);
+  if (n < sizeof(kbText) - 1) { kbText[n] = c; kbText[n + 1] = 0; }
+  if (kbShift) { kbShift = false; drawKeyboard(); return; }
+  drawKbField();
+}
+
+static void wifiApply() {
+  strlcpy(creds.ssid, kbSsid, sizeof(creds.ssid));
+  strlcpy(creds.pass, kbText, sizeof(creds.pass));
+  wifiSave(creds.ssid, creds.pass);
+  LOGF("[cyd] wifi credentials saved for %s\n", creds.ssid);
+  WiFi.disconnect(true);
+  delay(100);
+  WiFi.begin(creds.ssid, creds.pass);
+  wifiStartedAt = millis();
+}
+
 // ----------------------------------------------------------------- bar
 
 static void drawBar() {
@@ -313,7 +467,14 @@ static void drawBar() {
   char left[40];
   if (mode == Mode::TVList) snprintf(left, sizeof(left), "TVs");
   else if (mode == Mode::Keypad) snprintf(left, sizeof(left), "Pairing");
-  else if (ls == LinkState::NoWifi) snprintf(left, sizeof(left), WiFi.status() == WL_CONNECTED ? "wifi ok" : "wifi...");
+  else if (mode == Mode::WifiList) snprintf(left, sizeof(left), "Choose a network");
+  else if (mode == Mode::Keyboard) snprintf(left, sizeof(left), "Password");
+  else if (ls == LinkState::NoWifi) {
+    if (!creds.valid()) snprintf(left, sizeof(left), "No Wi-Fi - tap to set up");
+    else if (WiFi.status() == WL_CONNECTED) snprintf(left, sizeof(left), "wifi ok");
+    else if (millis() - wifiStartedAt > 30000) snprintf(left, sizeof(left), "Wi-Fi failed - tap");
+    else snprintf(left, sizeof(left), "wifi...");
+  }
   else {
     TVRecord rec;
     if (store.get(store.selected(), rec)) snprintf(left, sizeof(left), "%s", rec.name);
@@ -336,7 +497,9 @@ static void setMode(Mode m) {
   tft.fillRect(0, 0, tft.width(), GRID_H, BG);
   if (mode == Mode::Grid) drawGrid();
   else if (mode == Mode::TVList) drawList();
-  else drawKeypad();
+  else if (mode == Mode::Keypad) drawKeypad();
+  else if (mode == Mode::WifiList) { startWifiScan(); drawWifiList(); }
+  else drawKeyboard();
   drawBar();
 }
 
@@ -390,6 +553,7 @@ static void onPressGrid(int x, int y) {
 static void onPressList(int x, int y) {
   if (y >= BAR_Y) { setMode(Mode::Grid); return; }
   int r = y / ROW_H;
+  if (r == GRID_H / ROW_H - 1) { setMode(Mode::WifiList); return; }   // Wi-Fi row
   if (r >= rowCount) return;
   const ListRow& row = rows[r];
   char idx[4];
@@ -446,11 +610,70 @@ static void onPressKeypad(int x, int y) {
   }
 }
 
+static void onPressWifiList(int x, int y) {
+  if (y >= BAR_Y) { setMode(store.count() || creds.valid() ? Mode::TVList : Mode::Grid); return; }
+  int r = y / ROW_H;
+  if (r == GRID_H / ROW_H - 1) { startWifiScan(); drawWifiList(); return; }   // Rescan
+  if (r >= wifiRowCount || WiFi.scanComplete() < 0) return;
+  // Recover the SSID for row r the same way drawWifiList ordered them.
+  int n = WiFi.scanComplete();
+  int order[32]; int cnt = min(n, 32);
+  for (int i = 0; i < cnt; i++) order[i] = i;
+  for (int i = 0; i < cnt; i++) for (int j = i + 1; j < cnt; j++)
+    if (WiFi.RSSI(order[j]) > WiFi.RSSI(order[i])) { int t = order[i]; order[i] = order[j]; order[j] = t; }
+  int shown = 0; String seen[5]; int pick = -1;
+  for (int k = 0; k < cnt && shown < 5; k++) {
+    String ssid = WiFi.SSID(order[k]);
+    if (!ssid.length()) continue;
+    bool dup = false;
+    for (int q = 0; q < shown; q++) if (seen[q] == ssid) dup = true;
+    if (dup) continue;
+    seen[shown] = ssid;
+    if (shown == r) { pick = order[k]; break; }
+    shown++;
+  }
+  if (pick < 0) return;
+  strlcpy(kbSsid, WiFi.SSID(pick).c_str(), sizeof(kbSsid));
+  kbText[0] = 0; kbShift = false; kbSym = false;
+  if (WiFi.encryptionType(pick) == WIFI_AUTH_OPEN) { wifiApply(); setMode(Mode::Grid); return; }
+  setMode(Mode::Keyboard);
+}
+
+static void onPressKeyboard(int x, int y) {
+  if (y >= BAR_Y) { setMode(Mode::WifiList); return; }
+  if (y < KB_Y) return;
+  int r = (y - KB_Y) / KB_ROW_H;
+  if (r == 3) {
+    if (x < 64) { kbSym = !kbSym; kbShift = false; drawKeyboard(); }
+    else if (x >= tft.width() - 72) { if (kbText[0]) { wifiApply(); setMode(Mode::Grid); } }
+    else kbAppend(' ');
+    return;
+  }
+  if (r == 2) {
+    if (x >= tft.width() - 48) {                       // backspace
+      size_t n = strlen(kbText);
+      if (n) kbText[n - 1] = 0;
+      drawKbField();
+      return;
+    }
+    if (!kbSym && x < 48) { kbShift = !kbShift; drawKeyboard(); return; }
+  }
+  const char* keys; int x0;
+  kbRowGeom(r, keys, x0);
+  int i = (x - x0) / KB_KEY_W;
+  if (x < x0 || i < 0 || i >= (int)strlen(keys)) return;
+  char c = keys[i];
+  if (kbShift && !kbSym) c = toupper(c);
+  kbAppend(c);
+}
+
 static void onPress(int x, int y) {
   switch (mode) {
-    case Mode::Grid:   onPressGrid(x, y); break;
-    case Mode::TVList: onPressList(x, y); break;
-    case Mode::Keypad: onPressKeypad(x, y); break;
+    case Mode::Grid:     onPressGrid(x, y); break;
+    case Mode::TVList:   onPressList(x, y); break;
+    case Mode::Keypad:   onPressKeypad(x, y); break;
+    case Mode::WifiList: onPressWifiList(x, y); break;
+    case Mode::Keyboard: onPressKeyboard(x, y); break;
   }
 }
 
@@ -481,6 +704,8 @@ static void pollTouch() {
     // Ignore phantom presses: the IRQ line can twitch (notably at boot) with
     // no real pressure, in which case the controller reports z = 0.
     if (p.z < 150 || millis() < 1500) return;
+    lastTouchAt = millis();
+    if (dimmed) { dimmed = false; ledcWrite(BL_CH, 255); wasDown = true; return; }  // wake only
     int x = constrain((int)map(p.x, RAW_MIN, RAW_MAX, 0, tft.width()), 0, tft.width() - 1);
     int y = constrain((int)map(p.y, RAW_MIN, RAW_MAX, 0, tft.height()), 0, tft.height() - 1);
     onPress(x, y);
@@ -529,6 +754,13 @@ static void handleSerial() {
     if (!line[0]) continue;
     if (!strcmp(line, "scan")) { lg.post(CmdType::Scan); continue; }
     if (!strcmp(line, "layout reset")) { layout::resetDefault(); continue; }
+    if (!strncmp(line, "wifi ", 5)) {   // wifi SSID PASSWORD  (SSID may not contain spaces here)
+      char* sp = strchr(line + 5, ' ');
+      if (sp) { *sp = 0; strlcpy(kbSsid, line + 5, sizeof(kbSsid)); strlcpy(kbText, sp + 1, sizeof(kbText)); wifiApply(); }
+      continue;
+    }
+    if (!strcmp(line, "w")) { setMode(mode == Mode::WifiList ? Mode::Grid : Mode::WifiList); continue; }
+    if (!strcmp(line, "k")) { strlcpy(kbSsid, "Demo Network", sizeof(kbSsid)); kbText[0] = 0; setMode(Mode::Keyboard); continue; }
     if (!strncmp(line, "pair ", 5)) { startPairing(line + 5, "LG TV"); continue; }
     if (!strncmp(line, "pin ", 4)) { strlcpy(pin, line + 4, sizeof(pin)); pkState = PK_Checking; lg.post(CmdType::SubmitPin, pin); if (mode == Mode::Keypad) drawKeypad(); continue; }
     char* arg = line + 1;
@@ -585,7 +817,14 @@ static void syncState() {
   if (nowFlashing != flashing) { flashing = nowFlashing; barDirty = true; }
 
   static wl_status_t shownWifi = WL_IDLE_STATUS;
-  if (WiFi.status() != shownWifi) { shownWifi = WiFi.status(); barDirty = true; }
+  if (WiFi.status() != shownWifi) { shownWifi = WiFi.status(); barDirty = true; listDirty = true; }
+  static bool shownWifiFail = false;
+  bool wifiFail = creds.valid() && WiFi.status() != WL_CONNECTED && millis() - wifiStartedAt > 30000;
+  if (wifiFail != shownWifiFail) { shownWifiFail = wifiFail; barDirty = true; }
+
+  if (mode == Mode::WifiList && !wifiScanShown && WiFi.scanComplete() >= 0) { wifiScanShown = true; drawWifiList(); }
+
+  if (!dimmed && millis() - lastTouchAt > DIM_AFTER_MS) { dimmed = true; ledcWrite(BL_CH, 24); }
 
   // Forget confirmation timeout
   if (confirmForget >= 0 && millis() >= confirmUntil) { confirmForget = -1; listDirty = true; }
@@ -640,10 +879,24 @@ void setup() {
   drawGrid();
   drawBar();
 
+  // Backlight on PWM so it can dim when idle.
+  ledcSetup(BL_CH, 5000, 8);
+  ledcAttachPin(TFT_BL, BL_CH);
+  ledcWrite(BL_CH, 255);
+  lastTouchAt = millis();
+
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  LOGF("[cyd] wifi connecting to %s\n", WIFI_SSID);
+  WiFi.setAutoReconnect(true);
+  creds = wifiLoad();
+  if (creds.valid()) {
+    WiFi.begin(creds.ssid, creds.pass);
+    wifiStartedAt = millis();
+    LOGF("[cyd] wifi connecting to %s\n", creds.ssid);
+  } else {
+    LOGF("[cyd] no wifi credentials; opening setup\n");
+    setMode(Mode::WifiList);
+  }
 
   lg.begin(&store);
   webui::begin(&tft, &lg, &store);
