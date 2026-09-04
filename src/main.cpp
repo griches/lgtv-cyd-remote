@@ -275,7 +275,7 @@ static void drawList() {
     // Just below the last row (the Scan button), clear of the Wi-Fi row.
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(TFT_LIGHTGREY, BG);
-    tft.drawString("No TVs yet. Turn the TV on and tap Scan.", tft.width() / 2, rowCount * ROW_H + 24, 2);
+    tft.drawString("No TVs yet. Turn the TV on, then tap Scan for TVs.", tft.width() / 2, rowCount * ROW_H + 24, 2);
   }
 }
 
