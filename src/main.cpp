@@ -20,6 +20,7 @@
 #include "log.h"
 #include "secrets.h"
 #include "tvstore.h"
+#include "webui.h"
 
 // ------------------------------------------------------------- hardware
 
@@ -645,6 +646,7 @@ void setup() {
   LOGF("[cyd] wifi connecting to %s\n", WIFI_SSID);
 
   lg.begin(&store);
+  webui::begin(&tft, &lg, &store);
   LOGF("[cyd] %d TVs, selected %d\n", store.count(), store.selected());
 }
 
@@ -656,6 +658,7 @@ void loop() {
   }
   pollTouch();
   handleSerial();
+  webui::loop();
   syncState();
   delay(10);
 }
