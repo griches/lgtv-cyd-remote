@@ -9,10 +9,10 @@ phone, no app on the TV. Pair once, then tap.
 
 ![Remote page](docs/remote.png)
 
-It is a port of the *Smart Remote+* Stream Deck plugin to hardware: the same
-webOS protocol, the same key artwork, and the same pairing manifest, so
-pairings made with [lgtvremote-cli](https://github.com/griches/lgtvremote-cli)
-can be imported unchanged.
+It is a hardware version of *Smart Remote+*: the same webOS protocol, the same
+key artwork, and the same pairing manifest, so pairings made with
+[lgtvremote-cli](https://github.com/griches/lgtvremote-cli) can be imported
+unchanged.
 
 ## Features
 
@@ -130,8 +130,8 @@ script when changing the icon set.
 
 webOS exposes a JSON-over-WebSocket API (SSAP) on port 3001 (TLS, self-signed)
 with a plain fallback on 3000 for old firmware. The board registers with a
-manifest identical to the one used by lgtvremote-cli and the Stream Deck
-plugin, which is what makes client keys interchangeable between them. Remote
+manifest identical to the one used by lgtvremote-cli and Smart Remote+, which
+is what makes client keys interchangeable between them. Remote
 keys go over a second "pointer input" socket the TV hands out on request.
 Wake-on-LAN uses the MAC addresses the TV reports after pairing, and a few
 settings writes use the well-known `createAlert` workaround for `luna://`
@@ -176,8 +176,7 @@ waits for it to boot before sending anything.
 
 - [lgtvremote-cli](https://github.com/griches/lgtvremote-cli), the Python CLI
   whose pairing manifest and protocol this project shares.
-- *Smart Remote+*, the Stream Deck plugin whose actions and artwork this
-  remote reproduces.
+- *Smart Remote+*, whose actions and artwork this remote reproduces.
 
 ## Support
 
